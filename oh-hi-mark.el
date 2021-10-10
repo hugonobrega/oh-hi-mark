@@ -25,6 +25,7 @@
 ;; Defining the sorely-missed "mark now, decide later" functionality for notmuch-emacs
 
 ;;; Code:
+(require 'notmuch)
 (require 'notmuch-tree)
 
 (defvar ohm-marked nil)
@@ -93,7 +94,6 @@
   (notmuch-refresh-this-buffer))
 
 ;;; Give marked messages a different face
-(after! notmuch
   (defun notmuch-tree-format-field-list (field-list msg)
     "Format fields of MSG according to FIELD-LIST and return string."
     (let ((face (cond
@@ -106,7 +106,7 @@
       (dolist (spec field-list result-string)
         (let ((field-string (notmuch-tree-format-field (car spec) (cdr spec) msg)))
 	  (setq result-string (concat result-string field-string))))
-      (notmuch-apply-face result-string face t))))
+      (notmuch-apply-face result-string face t)))
 
 (provide 'oh-hi-mark)
 
