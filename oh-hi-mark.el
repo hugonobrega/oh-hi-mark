@@ -27,86 +27,91 @@
 ;;; Code:
 (require 'notmuch)
 (require 'notmuch-tree)
+(require 'evil-collection-notmuch)
 
-(defvar ohm-marked nil)
+(defvar ohm--mark-tag "ohm_bogus"
+  "What tag should be used as a `marker'.")
 
-(defun ohm-toggle--mark-message (&optional force)
-  (let* ((message-id (notmuch-tree-get-message-id))
-         (already-marked (member message-id ohm-marked)))
-    (cond
-     ((or
-       (and (eq force 'mark) (not already-marked))
-       (and (not (eq force 'unmark)) (not already-marked)))
-      (add-to-list 'ohm-marked (notmuch-tree-get-message-id)))
-     ((or
-       (and (eq force 'unmark) already-marked)
-       (and (not (eq force 'mark)) already-marked))
-      (setq ohm-marked (delete message-id ohm-marked))))))
+(defvar ohm--mark-tag-face '(:underline (:style wave :color "darkgray"))
+  "The face to apply to marked messages.
+
+This should be the same as the user's definition in
+`notmuch-search-line-faces' for consistent styling across notmuch
+buffers.")
+
+(defun ohm--mark-tag-search ()
+  "Create the search string for the marker tag."
+  (concat "tag:" ohm--mark-tag))
+
+(defun ohm--mark-add-tag-changes ()
+  (notmuch-tag-change-list (list ohm--mark-tag)))
+
+(defun ohm--mark-remove-tag-changes ()
+  (notmuch-tag-change-list (list ohm--mark-tag) t))
+
+;;; Marking
 
 ;;;###autoload
-(defun ohm-toggle-mark-message (&optional force)
+(defun ohm-tree-toggle-mark-message (&optional force)
   (interactive)
-  (ohm-toggle--mark-message force)
-  (notmuch-refresh-this-buffer))
+  (unless force
+    (evil-collection-notmuch-toggle-tag "ohm_bogus" "tree" #'notmuch-tree-next-message)))
 
 ;;;###autoload
-(defun ohm-toggle-mark-thread (&optional force)
+(defun ohm-tree-toggle-mark-thread (&optional force)
   (interactive)
-  (let* ((message-id (notmuch-tree-get-message-id))
-         (force
-          (or force 
-              (cond
-               ((member message-id ohm-marked)
-                'unmark)
-               (t 'mark)))))
-    (notmuch-tree-thread-mapcar (lambda () (ohm-toggle--mark-message force))))
-  (notmuch-refresh-this-buffer))
+  (let* ((tags (plist-get (notmuch-tree-get-message-properties) :tags))
+         (must-add (or force (not (member ohm--mark-tag tags)))))
+    (notmuch-tree-tag-thread
+     (if must-add
+         (ohm--mark-add-tag-changes)
+       (ohm--mark-remove-tag-changes)))))
 
-(defun ohm--insert-mark (orig-fun &rest msg)
-  (let* ((message-id (concat "id:" (plist-get (car msg) :id)))
-         (marked (member message-id ohm-marked)))
-    (if marked
-        (let* ((actualmsg (car msg))
-               (reldate (plist-get actualmsg :date_relative))
-               (msg (cons (plist-put actualmsg :mark t)
-                          (cdr msg))))
-          (apply orig-fun msg))
-      (apply orig-fun msg))))
+;;;###autoload
+(defun ohm-search-toggle-mark-thread (&optional force)
+  "Toggle marks in the notmuch search buffer."
+  (interactive)
+  (unless force
+    (evil-collection-notmuch-toggle-tag "ohm_bogus" "search" #'notmuch-search-next-thread)))
 
-(advice-add 'notmuch-tree-insert-msg :around #'ohm--insert-mark)
+;;; (un)Tagging
 
 ;;;###autoload
 (defun ohm-tag-marked-messages ()
   (interactive)
-  (if ohm-marked
-      (let ((search (string-join ohm-marked " or "))
-            (tagchange (notmuch-read-tag-changes nil "Tag changes: ")))
-        (if (y-or-n-p (format "Really apply tag changes %s to %s marked messages?" tagchange (length ohm-marked)))
-            (progn (notmuch-tag search tagchange)
-                   (setq ohm-marked nil)
-                   (notmuch-refresh-this-buffer))
-          (error "Canceled"))
-        (error "No marked messages to tag"))))
+  (let* ((mark-count (string-to-number (notmuch-saved-search-count (ohm--mark-tag-search))))
+         (existing-tags (notmuch-tag-completions (ohm--mark-tag-search)))
+         (tagchange (if (> mark-count 0)
+                        (notmuch-read-tag-changes existing-tags "Tag changes: ")
+                      (error "No marked messages to tag"))))
+    (if (y-or-n-p (format "Really apply tag changes %s to %s marked messages?"
+                          tagchange mark-count))
+        (progn (notmuch-tag (ohm--mark-tag-search) tagchange)
+               (notmuch-refresh-this-buffer))
+      (error "Canceled"))))
 
 (defun ohm-remove-all-marks ()
   (interactive)
-  (setq ohm-marked nil)
+  (notmuch-tag (ohm--mark-tag-search) (ohm--mark-remove-tag-changes))
   (notmuch-refresh-this-buffer))
 
-;;; Give marked messages a different face
-  (defun notmuch-tree-format-field-list (field-list msg)
-    "Format fields of MSG according to FIELD-LIST and return string."
-    (let ((face (cond
-                 ((plist-get msg :mark)
-                  '(underline :color "orange" :style wave))
-                 ((plist-get msg :match)
-		  'notmuch-tree-match-face)
-	         (t 'notmuch-tree-no-match-face)))
-	  (result-string))
-      (dolist (spec field-list result-string)
-        (let ((field-string (notmuch-tree-format-field (car spec) (cdr spec) msg)))
-	  (setq result-string (concat result-string field-string))))
-      (notmuch-apply-face result-string face t)))
+;;; Styling
+
+(defun ohm--propertize-tree-message (msg)
+  "After notmuch-emacs inserts a message in the tree, re-style it to
+include the mark face."
+  (let ((tags (plist-get msg :tags)))
+    (when (and ohm--mark-tag-face
+               (member ohm--mark-tag tags))
+      (save-excursion
+        (forward-line -1)
+        (notmuch-apply-face (current-buffer)
+                            ohm--mark-tag-face
+                            t
+                            (line-beginning-position)
+                            (line-end-position))))))
+
+(advice-add 'notmuch-tree-insert-msg :after #'ohm--propertize-tree-message)
 
 (provide 'oh-hi-mark)
 
