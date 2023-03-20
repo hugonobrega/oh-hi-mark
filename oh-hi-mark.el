@@ -61,11 +61,11 @@ buffers.")
 (defun ohm-tree-toggle-mark-thread (&optional force)
   (interactive)
   (let* ((tags (plist-get (notmuch-tree-get-message-properties) :tags))
-         (must-add (or force (member ohm--mark-tag tags))))
+         (must-add (or force (not (member ohm--mark-tag tags)))))
     (notmuch-tree-tag-thread
      (if must-add
-         (ohm--mark-remove-tag-changes)
-       (ohm--mark-add-tag-changes)))))
+         (ohm--mark-add-tag-changes)
+       (ohm--mark-remove-tag-changes)))))
 
 ;;;###autoload
 (defun ohm-search-toggle-mark-thread (&optional force)
